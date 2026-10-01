@@ -1,9 +1,9 @@
 module github.com/ipoluianov/altnotepad
 
-go 1.25.5
+go 1.27.1
 
 require (
-	github.com/ipoluianov/nui v0.0.0
+	github.com/ipoluianov/nui v0.0.5
 	golang.org/x/image v0.34.0
 	golang.org/x/text v0.32.0
 )
@@ -20,4 +20,4 @@ require (
 	golang.org/x/sys v0.33.0 // indirect
 )
 
-replace github.com/ipoluianov/nui => ../nui_ipoluianov
+// replace github.com/ipoluianov/nui => ../nui_ipoluianov
