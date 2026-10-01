@@ -1,0 +1,120 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+
+env:
+  APP_NAME: altnotepad
+  DISPLAY_NAME: AltNotepad
+  MAIN_PATH: ./
+
+permissions:
+  contents: write
+
+jobs:
+  check-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ensure HEAD is tagged
+        id: version
+        run: |
+          TAG=$(git describe --tags --exact-match HEAD 2>/dev/null) || {
+            echo "::error::Current commit has no tag. Build cancelled."
+            exit 1
+          }
+          echo "Releasing tag: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check-tag
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Build
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p build
+          EXT=""
+          LDFLAGS="-s -w -X github.com/ipoluianov/altnotepad/app.Version=${{ needs.check-tag.outputs.tag }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            EXT=".exe"
+            LDFLAGS="${LDFLAGS} -H=windowsgui"
+          fi
+          go build -trimpath -ldflags="${LDFLAGS}" \
+            -o build/${{ env.APP_NAME }}${EXT} ${{ env.MAIN_PATH }}
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          ARCHIVE_NAME=${{ env.APP_NAME }}-${{ needs.check-tag.outputs.tag }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            cd build && zip -r ../dist/${ARCHIVE_NAME}.zip . && cd ..
+          else
+            # Linux installer picks up <app>.svg from the archive as the menu icon
+            if [ "${{ matrix.goos }}" = "linux" ]; then
+              cp icon.svg build/${{ env.APP_NAME }}.svg
+            fi
+            tar -czf dist/${ARCHIVE_NAME}.tar.gz -C build .
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+
+  release:
+    needs: [check-tag, build]
+    runs-on: ubuntu-latest
+    steps:
+      # Needed to access scripts/linux-x64-install.sh.
+      # Must run BEFORE download-artifact, otherwise checkout wipes dist/
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Fill in app name, display name, tag and repo in the installer template
+      - name: Generate Linux installer
+        run: |
+          sed -e "s|__APP__|${{ env.APP_NAME }}|g" \
+              -e "s|__DISPLAY_NAME__|${{ env.DISPLAY_NAME }}|g" \
+              -e "s|__TAG__|${{ needs.check-tag.outputs.tag }}|g" \
+              -e "s|__REPO__|${{ github.repository }}|g" \
+              scripts/linux-x64-install.sh > dist/linux-x64-install.sh
+          chmod +x dist/linux-x64-install.sh
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check-tag.outputs.tag }}
+          files: dist/*
